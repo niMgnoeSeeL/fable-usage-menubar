@@ -20,14 +20,27 @@ EOF
   OVERLAY_FLAGS=(-vfsoverlay build/vfs-overlay.yaml -Xcc -ivfsoverlay -Xcc build/vfs-overlay.yaml)
 fi
 
-swiftc -O -swift-version 5 "${OVERLAY_FLAGS[@]}" -o build/FableUsage main.swift
+# bash 3.2 + `set -u` treats an empty array as unbound, hence the ${...+...} form.
+swiftc_() { swiftc -O -swift-version 5 ${OVERLAY_FLAGS[@]+"${OVERLAY_FLAGS[@]}"} "$@"; }
+
+# The icon is committed; delete AppIcon.icns to regenerate it from icon/make_icon.swift.
+if [[ ! -f AppIcon.icns ]]; then
+  swiftc_ -o build/make_icon icon/make_icon.swift
+  rm -rf build/AppIcon.iconset
+  build/make_icon build/AppIcon.iconset icon/preview.png
+  iconutil -c icns build/AppIcon.iconset -o AppIcon.icns
+fi
+
+swiftc_ -o build/FableUsage main.swift
 
 pkill -x FableUsage 2>/dev/null || true
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp Info.plist "$APP/Contents/Info.plist"
+cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp build/FableUsage "$APP/Contents/MacOS/FableUsage"
 codesign --force --sign - "$APP"
+touch "$APP"  # nudge Finder/LaunchServices to pick up the new icon
 
 # Reinstalling replaces the bundle and its ad-hoc signature, so re-register launch at login.
 "$APP/Contents/MacOS/FableUsage" --login on

@@ -1,5 +1,7 @@
 # FableUsage
 
+<img src="icon/preview.png" width="128" alt="FableUsage icon">
+
 macOS 메뉴바에 Claude **Fable 주간 한도 사용률**을 표시하고, 메뉴를 열면 이번 주 Fable을 어떤 Claude Code 세션이 얼마나 썼는지 보여주는 앱입니다.
 
 - 메뉴바: Fable 주간 한도 % (서버가 경고 상태로 표시하면 주황/빨강)
@@ -16,6 +18,8 @@ Xcode 없이 Command Line Tools(`swiftc`)만 있으면 됩니다.
 ```
 
 `~/Applications/FableUsage.app`에 설치하고 실행하며, 로그인 시 자동 실행을 등록합니다.
+
+아이콘(`AppIcon.icns`)은 `icon/make_icon.swift`로 그린 것입니다. 수정한 뒤 `AppIcon.icns`를 지우고 `./build.sh`를 실행하면 다시 만들어집니다.
 
 ## 명령행 옵션
 
