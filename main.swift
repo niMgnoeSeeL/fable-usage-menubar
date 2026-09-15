@@ -115,7 +115,7 @@ enum PlanLimitsClient {
                 if let error { return completion(.failure(error)) }
                 let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
                 guard status == 200, let data else {
-                    let hint = status == 401 ? " (토큰 만료: Claude Code를 실행하면 갱신돼요)" : ""
+                    let hint = status == 401 ? " (token expired: run Claude Code to refresh it)" : ""
                     return completion(.failure(LimitsError("HTTP \(status)\(hint)")))
                 }
                 completion(Result { try parse(data) })
@@ -138,14 +138,14 @@ enum PlanLimitsClient {
               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let oauth = obj["claudeAiOauth"] as? [String: Any],
               let token = oauth["accessToken"] as? String else {
-            throw LimitsError("키체인에서 Claude Code 로그인 정보를 찾지 못했어요")
+            throw LimitsError("Claude Code login not found in the keychain")
         }
         return token
     }
 
     static func parse(_ data: Data) throws -> PlanLimits {
         guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            throw LimitsError("응답 형식을 읽지 못했어요")
+            throw LimitsError("Couldn't read the response")
         }
         let items: [LimitItem] = ((obj["limits"] as? [[String: Any]]) ?? []).compactMap { l in
             guard let percent = (l["percent"] as? NSNumber)?.doubleValue else { return nil }
@@ -155,16 +155,16 @@ enum PlanLimitsClient {
             let surface = (scope?["surface"] as? [String: Any])?["display_name"] as? String
             let label: String
             switch kind {
-            case "session": label = "현재 세션 (5시간)"
-            case "weekly_all": label = "주간 · 모든 모델"
-            default: label = "주간 · \(model ?? surface ?? kind)"
+            case "session": label = "Current session (5h)"
+            case "weekly_all": label = "Weekly · All models"
+            default: label = "Weekly · \(model ?? surface ?? kind)"
             }
             return LimitItem(kind: kind, label: label, percent: percent,
                              severity: l["severity"] as? String ?? "normal",
                              resetsAt: parseAPIDate(l["resets_at"] as? String),
                              isFable: model?.localizedCaseInsensitiveContains("fable") == true)
         }
-        guard !items.isEmpty else { throw LimitsError("응답에 한도 정보가 없어요") }
+        guard !items.isEmpty else { throw LimitsError("No limits in the response") }
         let rows = ((obj["seven_day_breakdown"] as? [String: Any])?["rows"] as? [[String: Any]]) ?? []
         let breakdown = rows.compactMap { r -> (name: String, percent: Double)? in
             guard let name = r["display_name"] as? String, let p = (r["percent"] as? NSNumber)?.doubleValue else { return nil }
@@ -328,12 +328,14 @@ func truncate(_ s: String, _ n: Int) -> String { s.count > n ? String(s.prefix(n
 
 func relative(_ d: Date) -> String {
     let f = RelativeDateTimeFormatter()
+    f.locale = Locale(identifier: "en_US")
     f.unitsStyle = .short
     return f.localizedString(for: d, relativeTo: Date())
 }
 
 func shortDate(_ d: Date) -> String {
     let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
     f.dateFormat = "EEE M/d HH:mm"
     return f.string(from: d)
 }
@@ -426,11 +428,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         let key = "alertedFableWindow"
         guard UserDefaults.standard.string(forKey: key) != window else { return }
 
-        var body = "초기화: \(f.resetsAt.map(shortDate) ?? "-")"
+        var body = "Resets \(f.resetsAt.map(shortDate) ?? "-")"
         if let s = snapshot, let top = s.sessions.first {
-            body += "\n가장 많이 쓴 세션: \(truncate(top.displayName, 40)) (\(top.folder), \(pct(top.usage.weighted, s.total)))"
+            body += "\nTop session: \(truncate(top.displayName, 40)) (\(top.folder), \(pct(top.usage.weighted, s.total)))"
         }
-        postNotification(id: "fable-\(window)", title: String(format: "Fable 주간 한도 %.0f%% 사용", f.percent), body: body) { error in
+        postNotification(id: "fable-\(window)", title: String(format: "Fable weekly limit %.0f%% used", f.percent), body: body) { error in
             if error == nil { DispatchQueue.main.async { UserDefaults.standard.set(window, forKey: key) } }
         }
     }
@@ -467,39 +469,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private func rebuildMenu() {
         menu.removeAllItems()
 
-        menu.addItem(info("플랜 한도 (claude.ai)", bold: true))
+        menu.addItem(info("Plan limits (claude.ai)", bold: true))
         if let l = limits {
             for item in l.items { menu.addItem(limitItem(item)) }
             let used = l.breakdown.filter { $0.percent > 0 }.map { "\($0.name) \(Int($0.percent))%" }
-            if !used.isEmpty { menu.addItem(info("이번 주 사용처: " + used.joined(separator: " · "))) }
-            menu.addItem(info("갱신 \(relative(l.fetchedAt))" + (limitsError.map { " · 최근 갱신 실패: \($0)" } ?? "")))
+            if !used.isEmpty { menu.addItem(info("This week by surface: " + used.joined(separator: " · "))) }
+            menu.addItem(info("Updated \(relative(l.fetchedAt))" + (limitsError.map { " · last refresh failed: \($0)" } ?? "")))
         } else {
-            menu.addItem(info(limitsError.map { "불러오기 실패: \($0)" } ?? "불러오는 중…"))
+            menu.addItem(info(limitsError.map { "Couldn't load limits: \($0)" } ?? "Loading…"))
         }
         menu.addItem(.separator())
 
         guard let s = snapshot else { return }
-        menu.addItem(info("이번 주 Fable 사용량  \(fmt(s.total)) (가중 토큰, 이 Mac의 Claude Code)", bold: true))
-        menu.addItem(info("\(shortDate(s.weekStart)) 부터 · 초기화 \(shortDate(s.nextReset)) (\(relative(s.nextReset)))"))
+        menu.addItem(info("Fable this week  \(fmt(s.total)) (weighted tokens, Claude Code on this Mac)", bold: true))
+        menu.addItem(info("Since \(shortDate(s.weekStart)) · resets \(shortDate(s.nextReset)) (\(relative(s.nextReset)))"))
         menu.addItem(.separator())
 
-        if s.sessions.isEmpty { menu.addItem(info("이번 주 Fable 사용 기록 없음")) }
+        if s.sessions.isEmpty { menu.addItem(info("No Fable usage this week")) }
         for st in s.sessions.prefix(maxRows) { menu.addItem(sessionItem(st, in: s)) }
         if s.sessions.count > maxRows {
             let rest = s.sessions.dropFirst(maxRows).reduce(0) { $0 + $1.usage.weighted }
-            menu.addItem(info("외 \(s.sessions.count - maxRows)개 세션 · \(pct(rest, s.total))"))
+            menu.addItem(info("+\(s.sessions.count - maxRows) more sessions · \(pct(rest, s.total))"))
         }
 
         menu.addItem(.separator())
-        menu.addItem(info("●  실행 중(작업)   ●  실행 중(대기)   ○  종료됨"))
+        menu.addItem(info("●  running (busy)   ●  running (idle)   ○  ended"))
         menu.addItem(.separator())
-        menu.addItem(action("claude.ai 사용량 페이지 열기", #selector(openUsagePage), key: "u"))
-        menu.addItem(action("새로고침", #selector(refreshNow), key: "r"))
-        let login = action("로그인 시 자동 실행", #selector(toggleLogin))
+        menu.addItem(action("Open claude.ai Usage Page", #selector(openUsagePage), key: "u"))
+        menu.addItem(action("Refresh", #selector(refreshNow), key: "r"))
+        let login = action("Launch at Login", #selector(toggleLogin))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         quit.target = NSApp
         menu.addItem(quit)
     }
@@ -524,7 +526,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         add(String(format: "\t%.0f%%", l.percent), [.font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold), .foregroundColor: color])
         add("\t" + bar(l.percent), [.font: NSFont.systemFont(ofSize: 9), .foregroundColor: color])
         if let r = l.resetsAt {
-            add("\t초기화 \(shortDate(r))", [.font: NSFont.menuFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
+            add("\tResets \(shortDate(r))", [.font: NSFont.menuFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
         }
         let item = NSMenuItem()
         item.attributedTitle = t
@@ -552,7 +554,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         add(live == nil ? "○" : "●", [.foregroundColor: dotColor, .font: NSFont.menuFont(ofSize: 13)])
         add("\t\(pct(st.usage.weighted, s.total))\t\(fmt(st.usage.weighted))", [.font: digits])
         add("\t" + truncate(st.displayName, 44), [.font: NSFont.menuFont(ofSize: 13)])
-        var detail = "\(st.folder) · \(st.usage.calls)회 · 평균 컨텍스트 \(fmt(st.avgContext))"
+        var detail = "\(st.folder) · \(st.usage.calls) calls · avg context \(fmt(st.avgContext))"
         if let last = st.last { detail += " · " + relative(last) }
         add("\n\t\t\t" + detail, [.font: NSFont.menuFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
 
@@ -560,22 +562,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         item.attributedTitle = t
 
         let sub = NSMenu()
-        sub.addItem(info("세션 ID: \(st.id)"))
+        sub.addItem(info("Session ID: \(st.id)"))
         if let cwd = st.cwd { sub.addItem(info(cwd)) }
-        if let title = st.title { sub.addItem(info("제목: \(title)")) }
-        if let p = st.prompt { sub.addItem(info("첫 프롬프트: \(truncate(p, 70))")) }
-        sub.addItem(info("출력 \(fmt(st.usage.output)) · 캐시 쓰기 \(fmt(st.usage.cacheWrite)) · 캐시 읽기 \(fmt(st.usage.cacheRead))"))
+        if let title = st.title { sub.addItem(info("Title: \(title)")) }
+        if let p = st.prompt { sub.addItem(info("First prompt: \(truncate(p, 70))")) }
+        sub.addItem(info("Output \(fmt(st.usage.output)) · cache write \(fmt(st.usage.cacheWrite)) · cache read \(fmt(st.usage.cacheRead))"))
         if st.usage.subagentWeighted > 0 {
-            sub.addItem(info("서브에이전트 비중 \(pct(st.usage.subagentWeighted, st.usage.weighted))"))
+            sub.addItem(info("Subagent share \(pct(st.usage.subagentWeighted, st.usage.weighted))"))
         }
-        if let live { sub.addItem(info("실행 중 (\(live.status ?? "상태 모름"))")) }
+        if let live { sub.addItem(info("Running (\(live.status ?? "unknown"))")) }
         sub.addItem(.separator())
         if let cwd = st.cwd {
             let quoted = "'" + cwd.replacingOccurrences(of: "'", with: "'\\''") + "'"
-            sub.addItem(action("재개 명령어 복사", #selector(copyText(_:)), rep: "cd \(quoted) && claude --resume \(st.id)"))
+            sub.addItem(action("Copy Resume Command", #selector(copyText(_:)), rep: "cd \(quoted) && claude --resume \(st.id)"))
         }
-        sub.addItem(action("세션 ID 복사", #selector(copyText(_:)), rep: st.id))
-        if let cwd = st.cwd { sub.addItem(action("Finder에서 폴더 열기", #selector(openFolder(_:)), rep: cwd)) }
+        sub.addItem(action("Copy Session ID", #selector(copyText(_:)), rep: st.id))
+        if let cwd = st.cwd { sub.addItem(action("Open Folder in Finder", #selector(openFolder(_:)), rep: cwd)) }
         item.submenu = sub
         return item
     }
@@ -649,8 +651,8 @@ if CommandLine.arguments.contains("--test-alert") {
         let names: [UNAuthorizationStatus: String] = [.authorized: "authorized", .denied: "denied",
                                                       .notDetermined: "notDetermined", .provisional: "provisional"]
         print("notification permission: \(names[settings.authorizationStatus] ?? "unknown")")
-        postNotification(id: "fable-test", title: "Fable 주간 한도 알림 테스트",
-                         body: "한도가 \(Int(alertThreshold))%를 넘으면 이렇게 알려드려요.") { error in
+        postNotification(id: "fable-test", title: "Fable weekly limit alert test",
+                         body: "You'll get a notification like this when the limit passes \(Int(alertThreshold))%.") { error in
             print(error.map { "notification error: \($0)" } ?? "notification sent")
             done.signal()
         }

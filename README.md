@@ -9,8 +9,6 @@ A macOS menu bar app that shows your Claude **Fable weekly limit usage**, and wh
 - Session submenu: copy resume command, copy session ID, open folder in Finder
 - A notification once per weekly window when the Fable limit passes 80%
 
-The menu UI is in Korean.
-
 ## Build and install
 
 Only the Command Line Tools (`swiftc`) are required; no Xcode.
